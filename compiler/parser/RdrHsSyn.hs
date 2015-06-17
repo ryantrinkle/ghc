@@ -29,6 +29,7 @@ module RdrHsSyn (
 
         -- Stuff to do with Foreign declarations
         mkImport,
+        parseForeignImport,
         parseCImport,
         mkExport,
         mkExtName,           -- RdrName -> CLabelString
@@ -1367,27 +1368,38 @@ mkImport :: Located CCallConv
          -> Located Safety
          -> (Located FastString, Located RdrName, LHsType RdrName)
          -> P (HsDecl RdrName)
-mkImport (L lc cconv) (L ls safety) (L loc entity, v, ty)
+mkImport cconv safety (entity, v, ty) =
+  case parseForeignImport cconv safety (entity, v, ty) of
+    Right foreignDecl -> return (ForD foreignDecl)
+    Left (loc, sdoc) -> parseErrorSDoc loc sdoc
+
+-- parse a foreign import declaration, or return an error explaining why
+-- it could not be parsed
+parseForeignImport :: Located CCallConv
+                   -> Located Safety
+                   -> (Located FastString, Located RdrName, LHsType RdrName)
+                   -> Either (SrcSpan, SDoc) (ForeignDecl RdrName)
+parseForeignImport (L lc cconv) (L ls safety) (L loc entity, v, ty)
   | Just loc <- maybeLocation $ findWildcards ty
-    = parseErrorSDoc loc $
+    = Left $ (,) loc $
       text "Wildcard not allowed" $$
       text "In foreign import declaration" <+>
       quotes (ppr v) $$ ppr ty
-  | cconv == PrimCallConv                      = do
+  | cconv == PrimCallConv =
   let funcTarget = CFunction (StaticTarget entity Nothing True)
       importSpec = CImport (L lc PrimCallConv) (L ls safety) Nothing funcTarget
                            (L loc (unpackFS entity))
-  return (ForD (ForeignImport v ty noForeignImportCoercionYet importSpec))
-  | cconv == JavaScriptCallConv = do
+  in Right (ForeignImport v ty noForeignImportCoercionYet importSpec)
+  | cconv == JavaScriptCallConv =
   let funcTarget = CFunction (StaticTarget entity Nothing True)
       importSpec = CImport (L lc JavaScriptCallConv) (L ls safety) Nothing
                            funcTarget (L loc (unpackFS entity))
-  return (ForD (ForeignImport v ty noForeignImportCoercionYet importSpec))
-  | otherwise = do
+  in Right (ForeignImport v ty noForeignImportCoercionYet importSpec)
+  | otherwise =
     case parseCImport (L lc cconv) (L ls safety) (mkExtName (unLoc v))
                       (unpackFS entity) (L loc (unpackFS entity)) of
-      Nothing         -> parseErrorSDoc loc (text "Malformed entity string")
-      Just importSpec -> return (ForD (ForeignImport v ty noForeignImportCoercionYet importSpec))
+      Nothing         -> Left (loc, text "Malformed entity string")
+      Just importSpec -> Right (ForeignImport v ty noForeignImportCoercionYet importSpec)
 
 -- the string "foo" is ambigous: either a header or a C identifier.  The
 -- C identifier case comes first in the alternatives below, so we pick
