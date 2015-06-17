@@ -476,15 +476,14 @@ noExistentials = []
 
 cvtForD :: Foreign -> CvtM (ForeignDecl RdrName)
 cvtForD (ImportF callconv safety from nm ty)
-  | Just impspec <- parseCImport (noLoc (cvt_conv callconv)) (noLoc safety')
-                                 (mkFastString (TH.nameBase nm))
-                                 from (noLoc from)
   = do { nm' <- vNameL nm
        ; ty' <- cvtType ty
-       ; return (ForeignImport nm' ty' noForeignImportCoercionYet impspec)
+       ; let efd = parseForeignImport (noLoc (cvt_conv callconv)) (noLoc safety')
+                     (noLoc (mkFastString from), nm', ty')
+       ; case efd of
+           Left (_, sdoc) -> failWith sdoc
+           Right fd -> return fd
        }
-  | otherwise
-  = failWith $ text (show from) <+> ptext (sLit "is not a valid ccall impent")
   where
     safety' = case safety of
                      Unsafe     -> PlayRisky
